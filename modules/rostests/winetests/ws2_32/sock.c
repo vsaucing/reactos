@@ -8431,7 +8431,11 @@ todo_wine
     iret = connect(connector, (struct sockaddr*)&bindAddress, sizeof(bindAddress));
     ok(iret == 0, "connecting to accepting socket failed, error %d\n", WSAGetLastError());
 
+#ifdef __REACTOS__
+    dwret = WaitForSingleObject(overlapped.hEvent, 3000);
+#else
     dwret = WaitForSingleObject(overlapped.hEvent, INFINITE);
+#endif
     ok(dwret == WAIT_OBJECT_0, "Waiting for accept event failed with %d + errno %d\n", dwret, GetLastError());
 
     bret = GetOverlappedResult((HANDLE)listener, &overlapped, &bytesReturned, FALSE);

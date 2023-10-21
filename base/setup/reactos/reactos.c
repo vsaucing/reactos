@@ -2558,6 +2558,10 @@ _tWinMain(HINSTANCE hInst,
     PROPSHEETPAGE psp = {0};
     UINT nPages = 0;
 
+#if DBG // TEMP until Setup is ready!
+    if (IsDebuggerPresent()) __debugbreak();
+#endif
+
     ProcessHeap = GetProcessHeap();
 
     SetupData.hInstance = hInst;

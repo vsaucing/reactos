@@ -54,7 +54,7 @@ START_TEST(NtReadFile)
 
     trace("System is %d bits, Size of MDL: %lu\n", Is64BitSystem() ? 64 : 32, SizeOfMdl());
     trace("Max MDL data size: 0x%lx bytes\n", LargeMdlMaxDataSize);
-
+    //__debugbreak();
     ByteOffset.QuadPart = 0;
 
     Buffer = NULL;

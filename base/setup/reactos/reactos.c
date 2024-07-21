@@ -1769,7 +1769,7 @@ PrepareAndDoCopyThread(
     NTSTATUS Status;
     FSVOL_CONTEXT FsVolContext;
     COPYCONTEXT CopyContext;
-    // WCHAR PathBuffer[MAX_PATH];
+    /**/WCHAR PathBuffer[MAX_PATH];/**/
 
     /* Retrieve pointer to the global setup data */
     pSetupData = (PSETUPDATA)GetWindowLongPtrW(hwndDlg, GWLP_USERDATA);
@@ -1985,6 +1985,135 @@ PrepareAndDoCopyThread(
                                  NULL /* SubstSettings */);
     DBG_UNREFERENCED_PARAMETER(ErrorNumber);
     SendMessageW(UiContext.hWndProgress, PBM_SETPOS, 100, 0);
+
+    /*
+     * And finally, install the bootloader
+     */
+
+    /* Set status text */
+    SetDlgItemTextW(hwndDlg, IDC_ACTIVITY, L"Installing the bootloader...");
+    SetDlgItemTextW(hwndDlg, IDC_ITEM, L"");
+
+    RtlFreeUnicodeString(&pSetupData->USetupData.SystemRootPath);
+    StringCchPrintfW(PathBuffer, ARRAYSIZE(PathBuffer),
+         L"\\Device\\Harddisk%lu\\Partition%lu\\",
+         SystemPartition->DiskEntry->DiskNumber,
+         SystemPartition->PartitionNumber);
+    RtlCreateUnicodeString(&pSetupData->USetupData.SystemRootPath, PathBuffer);
+    DPRINT1("SystemRootPath: %wZ\n", &pSetupData->USetupData.SystemRootPath);
+
+    switch (pSetupData->USetupData.BootLoaderLocation)
+    {
+        /* Skip installation */
+        case 0:
+            break;
+
+        /* Install on removable disk */
+        case 1:
+        {
+            // FIXME: So far USETUP only supports the 1st floppy.
+            static const UNICODE_STRING FloppyDrive = RTL_CONSTANT_STRING(L"\\Device\\Floppy0\\");
+
+            INT nRet;
+        Retry:
+            nRet = DisplayMessage(GetParent(hwndDlg),
+                                  MB_ICONINFORMATION | MB_OKCANCEL,
+                                  L"Bootloader installation",
+                                  L"Please insert a blank floppy disk in drive %c: .\n"
+                                  L"All data in the floppy disk will be erased!\n"
+                                  L"\nClick on OK to continue."
+                                  L"\nClick on CANCEL to skip bootloader installation.",
+                                  L'A');
+            if (nRet != IDOK)
+                break; // Skip installation
+
+            Status = InstallBootcodeToRemovable(pSetupData->USetupData.ArchType,
+                                                &FloppyDrive,
+                                                &pSetupData->USetupData.SourceRootPath,
+                                                &pSetupData->USetupData.DestinationArcPath,
+                                                L"FAT");
+            if (!NT_SUCCESS(Status))
+            {
+                if (Status == STATUS_DEVICE_NOT_READY)
+                {
+                    // ERROR_NO_FLOPPY
+                    DisplayMessage(GetParent(hwndDlg),
+                                   MB_ICONERROR | MB_OK,
+                                   NULL, // Default to "Error"
+                                   L"No disk detected in drive %c: .",
+                                   L'A');
+                }
+
+                /* TODO: Print error message */
+                goto Retry;
+            }
+
+            break;
+        }
+
+        /* Install on hard-disk (both MBR and VBR, or VBR only) */
+        case 2: // System partition / MBR and VBR (on BIOS-based PC)
+        case 3: // VBR only (on BIOS-based PC)
+        {
+            NTSTATUS Status;
+
+            /* Copy FreeLoader to the disk and save the boot entries */
+            Status = InstallBootManagerAndBootEntries(
+                        pSetupData->USetupData.ArchType,
+                        &pSetupData->USetupData.SourceRootPath,
+                        &pSetupData->USetupData.SystemRootPath,
+                        /**/SystemVolume,/**/ // FIXME: Redundant param.
+                        &pSetupData->USetupData.DestinationArcPath,
+                        ((pSetupData->USetupData.BootLoaderLocation == 2)
+                            ? 1 /* Install MBR and VBR */
+                            : 0 /* Install VBR only */));
+            if (Status == STATUS_SUCCESS) // (NT_SUCCESS(Status))
+                break; // Successful installation.
+
+            if (Status == ERROR_WRITE_BOOT)
+            {
+                /* Error when writing the VBR */
+                // ERROR_WRITE_BOOT
+                DisplayMessage(GetParent(hwndDlg),
+                               MB_ICONERROR | MB_OK,
+                               NULL, // Default to "Error"
+                               L"Setup failed to install the %s bootcode on the system partition.",
+                               SystemVolume->Info.FileSystem);
+            }
+            else if (Status == ERROR_INSTALL_BOOTCODE)
+            {
+                /* Error when writing the MBR */
+                // ERROR_INSTALL_BOOTCODE
+                DisplayMessage(GetParent(hwndDlg),
+                               MB_ICONERROR | MB_OK,
+                               NULL, // Default to "Error"
+                               L"Setup failed to install the %s bootcode on the boot disk.",
+                               L"MBR");
+            }
+            else if (Status == STATUS_NOT_SUPPORTED)
+            {
+                DisplayMessage(GetParent(hwndDlg),
+                               MB_ICONERROR | MB_OK,
+                               NULL, // Default to "Error"
+                               L"Setup does not currently support installing "
+                               L"the bootloader on the computer you are using.\n"
+                               L"Click on OK to continue anyway.");
+            }
+            else /* Any other NTSTATUS code */
+            {
+                DPRINT1("InstallBootManagerAndBootEntries() failed: Status 0x%lx\n", Status);
+                DisplayMessage(GetParent(hwndDlg),
+                               MB_ICONERROR | MB_OK,
+                               NULL, // Default to "Error"
+                               L"Setup could not install the bootloader (Status 0x%08lx).",
+                               Status);
+            }
+            break;
+        }
+
+        default:
+            break;
+    }
 
 
     /* We are done! Switch to the Terminate page */

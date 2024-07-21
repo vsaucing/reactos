@@ -1769,7 +1769,7 @@ PrepareAndDoCopyThread(
     NTSTATUS Status;
     FSVOL_CONTEXT FsVolContext;
     COPYCONTEXT CopyContext;
-    // WCHAR PathBuffer[MAX_PATH];
+    /**/WCHAR PathBuffer[MAX_PATH];/**/
 
     /* Retrieve pointer to the global setup data */
     pSetupData = (PSETUPDATA)GetWindowLongPtrW(hwndDlg, GWLP_USERDATA);
@@ -1985,6 +1985,109 @@ PrepareAndDoCopyThread(
                                  NULL /* SubstSettings */);
     DBG_UNREFERENCED_PARAMETER(ErrorNumber);
     SendMessageW(UiContext.hWndProgress, PBM_SETPOS, 100, 0);
+
+    /*
+     * And finally, install the bootloader!
+     */
+
+    /* Set status text */
+    SetDlgItemTextW(hwndDlg, IDC_ACTIVITY, L"Installing the bootloader...");
+    SetDlgItemTextW(hwndDlg, IDC_ITEM, L"");
+
+    RtlFreeUnicodeString(&pSetupData->USetupData.SystemRootPath);
+    StringCchPrintfW(PathBuffer, ARRAYSIZE(PathBuffer),
+         L"\\Device\\Harddisk%lu\\Partition%lu\\",
+         SystemPartition->DiskEntry->DiskNumber,
+         SystemPartition->PartitionNumber);
+    RtlCreateUnicodeString(&pSetupData->USetupData.SystemRootPath, PathBuffer);
+    DPRINT1("SystemRootPath: %wZ\n", &pSetupData->USetupData.SystemRootPath);
+
+    switch (pSetupData->USetupData.BootLoaderLocation)
+    {
+        /* Skip installation */
+        case 0:
+            break;
+
+#if 0 // FIXME: TODO
+        /* Install on removable disk */
+        case 1:
+            (void)BootLoaderRemovableDiskPage(Ir);
+            break;
+#endif
+
+        /* Install on hard-disk (both MBR and VBR, or VBR only) */
+        case 2:
+        case 3:
+        {
+            // (void)BootLoaderHardDiskPage(Ir);
+
+            NTSTATUS Status;
+            WCHAR DestinationDevicePathBuffer[MAX_PATH];
+
+            if (pSetupData->USetupData.BootLoaderLocation == 2)
+            {
+                /* Step 1: Write the VBR */
+                Status = InstallVBRToPartition(&pSetupData->USetupData.SystemRootPath,
+                                               &pSetupData->USetupData.SourceRootPath,
+                                               &pSetupData->USetupData.DestinationArcPath,
+                                               SystemPartition->Volume.FileSystem);
+                if (!NT_SUCCESS(Status))
+                {
+                    // ERROR_WRITE_BOOT
+                    DisplayMessage(NULL, MB_ICONERROR | MB_OK,
+                                   L"Error",
+                                   L"Setup failed to install %s bootcode on the system partition.",
+                                   SystemPartition->Volume.FileSystem);
+                    // return FALSE;
+                    break;
+                }
+
+                /* Step 2: Write the MBR if the disk containing the system partition is not a super-floppy */
+                if (!IsSuperFloppy(SystemPartition->DiskEntry))
+                {
+                    StringCchPrintfW(DestinationDevicePathBuffer, ARRAYSIZE(DestinationDevicePathBuffer),
+                                     L"\\Device\\Harddisk%d\\Partition0",
+                                     SystemPartition->DiskEntry->DiskNumber);
+                    Status = InstallMbrBootCodeToDisk(&pSetupData->USetupData.SystemRootPath,
+                                                      &pSetupData->USetupData.SourceRootPath,
+                                                      DestinationDevicePathBuffer);
+                    if (!NT_SUCCESS(Status))
+                    {
+                        DPRINT1("InstallMbrBootCodeToDisk() failed (Status %lx)\n", Status);
+                        // ERROR_INSTALL_BOOTCODE
+                        DisplayMessage(NULL, MB_ICONERROR | MB_OK,
+                                       L"Error",
+                                       L"Setup failed to install the %s bootcode on the system partition.",
+                                       L"MBR");
+                        // return FALSE;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                Status = InstallVBRToPartition(&pSetupData->USetupData.SystemRootPath,
+                                               &pSetupData->USetupData.SourceRootPath,
+                                               &pSetupData->USetupData.DestinationArcPath,
+                                               SystemPartition->Volume.FileSystem);
+                if (!NT_SUCCESS(Status))
+                {
+                    // ERROR_WRITE_BOOT
+                    DisplayMessage(NULL, MB_ICONERROR | MB_OK,
+                                   L"Error",
+                                   L"Setup failed to install %s bootcode on the system partition.",
+                                   SystemPartition->Volume.FileSystem);
+                    return FALSE;
+                }
+            }
+
+            // return TRUE;
+            break;
+        }
+
+        default:
+            break;
+    }
 
 
     /* We are done! Switch to the Terminate page */

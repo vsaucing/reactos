@@ -508,14 +508,20 @@ GetNTOSInstallationName(
     IN SIZE_T cchBufferSize)
 {
     PNTOS_INSTALLATION NtOsInstall = (PNTOS_INSTALLATION)GetListEntryData(Entry);
-    PPARTENTRY PartEntry = NtOsInstall->PartEntry;
 
-    if (PartEntry && PartEntry->DriveLetter)
+    /* Retrieve the corresponding disk and partition */
+    PDISKENTRY DiskEntry = NULL;
+    PPARTENTRY PartEntry = NULL; // NtOsInstall->PartEntry;
+    GetDiskOrPartition(PartitionList,
+                       NtOsInstall->DiskNumber, NtOsInstall->PartitionNumber,
+                       &DiskEntry, &PartEntry);
+
+    if (PartEntry && PartEntry->Volume.DriveLetter)
     {
         /* We have retrieved a partition that is mounted */
         return RtlStringCchPrintfA(Buffer, cchBufferSize,
                                    "%C:%S  \"%S\"",
-                                   PartEntry->DriveLetter,
+                                   PartEntry->Volume.DriveLetter,
                                    NtOsInstall->PathComponent,
                                    NtOsInstall->InstallationName);
     }
@@ -1795,7 +1801,7 @@ SelectPartitionPage(PINPUT_RECORD Ir)
 // TODO: Do something similar before trying to format the partition?
             if (!CurrentPartition->New &&
                 !IsContainerPartition(CurrentPartition->PartitionType) &&
-                CurrentPartition->FormatState != Unformatted)
+                CurrentPartition->Volume.FormatState != Unformatted)
             {
                 ASSERT(CurrentPartition->PartitionNumber != 0);
 
@@ -2410,7 +2416,7 @@ Restart:
                         LineBuffer);
 
     /* Show "This Partition will be formatted next" only if it is unformatted */
-    if (PartEntry->New || PartEntry->FormatState == Unformatted)
+    if (PartEntry->New || PartEntry->Volume.FormatState == Unformatted)
         CONSOLE_SetTextXY(6, 14, MUIGetString(STRING_PARTFORMAT));
 
     ASSERT(!FileSystemList);
@@ -2442,7 +2448,7 @@ Restart:
     // TODO: Display only the FSes compatible with the selected partition!
     FileSystemList = CreateFileSystemList(6, 26,
                                           PartEntry->New ||
-                                          PartEntry->FormatState == Unformatted,
+                                          PartEntry->Volume.FormatState == Unformatted,
                                           DefaultFs);
     if (!FileSystemList)
     {
@@ -2493,7 +2499,7 @@ Restart:
         {
             if (!FileSystemList->Selected->FileSystem)
             {
-                ASSERT(!PartEntry->New && PartEntry->FormatState != Unformatted);
+                ASSERT(!PartEntry->New && PartEntry->Volume.FormatState != Unformatted);
 
                 /*
                  * Skip formatting this partition. We will also ignore
@@ -2503,7 +2509,7 @@ Restart:
                 if (PartEntry != SystemPartition &&
                     PartEntry != InstallPartition)
                 {
-                    PartEntry->NeedsCheck = FALSE;
+                    PartEntry->Volume.NeedsCheck = FALSE;
                 }
                 return FSVOL_SKIP;
             }
@@ -3463,7 +3469,7 @@ RegistryPage(PINPUT_RECORD Ir)
     Error = UpdateRegistry(&USetupData,
                            RepairUpdateFlag,
                            PartitionList,
-                           InstallPartition->DriveLetter,
+                           InstallPartition->Volume.DriveLetter,
                            SelectedLanguageId,
                            RegistryStatus,
                            &s_SubstSettings);
@@ -3507,15 +3513,15 @@ BootLoaderSelectPage(PINPUT_RECORD Ir)
      */
     if (RepairUpdateFlag)
     {
-        USetupData.MBRInstallType = 0;
+        USetupData.BootLoaderLocation = 0;
         goto Quit;
     }
 
     /* For unattended setup, skip MBR installation or install on removable disk if needed */
     if (IsUnattendedSetup)
     {
-        if ((USetupData.MBRInstallType == 0) ||
-            (USetupData.MBRInstallType == 1))
+        if ((USetupData.BootLoaderLocation == 0) ||
+            (USetupData.BootLoaderLocation == 1))
         {
             goto Quit;
         }
@@ -3530,7 +3536,7 @@ BootLoaderSelectPage(PINPUT_RECORD Ir)
     if ((SystemPartition->DiskEntry->DiskStyle != PARTITION_STYLE_MBR) ||
         !IsRecognizedPartition(SystemPartition->PartitionType))
     {
-        USetupData.MBRInstallType = 1;
+        USetupData.BootLoaderLocation = 1;
         goto Quit;
     }
 #endif
@@ -3538,8 +3544,8 @@ BootLoaderSelectPage(PINPUT_RECORD Ir)
     /* Is it an unattended install on hdd? */
     if (IsUnattendedSetup)
     {
-        if ((USetupData.MBRInstallType == 2) ||
-            (USetupData.MBRInstallType == 3))
+        if ((USetupData.BootLoaderLocation == 2) ||
+            (USetupData.BootLoaderLocation == 3))
         {
             goto Quit;
         }
@@ -3611,25 +3617,25 @@ BootLoaderSelectPage(PINPUT_RECORD Ir)
             if (Line == 12)
             {
                 /* Install on both MBR and VBR */
-                USetupData.MBRInstallType = 2;
+                USetupData.BootLoaderLocation = 2;
                 break;
             }
             else if (Line == 13)
             {
                 /* Install on VBR only */
-                USetupData.MBRInstallType = 3;
+                USetupData.BootLoaderLocation = 3;
                 break;
             }
             else if (Line == 14)
             {
                 /* Install on removable disk */
-                USetupData.MBRInstallType = 1;
+                USetupData.BootLoaderLocation = 1;
                 break;
             }
             else if (Line == 15)
             {
                 /* Skip installation */
-                USetupData.MBRInstallType = 0;
+                USetupData.BootLoaderLocation = 0;
                 break;
             }
 
@@ -3698,17 +3704,17 @@ BootLoaderHardDiskPage(PINPUT_RECORD Ir)
     NTSTATUS Status;
     WCHAR DestinationDevicePathBuffer[MAX_PATH];
 
-    if (USetupData.MBRInstallType == 2)
+    if (USetupData.BootLoaderLocation == 2)
     {
         /* Step 1: Write the VBR */
         Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                        &USetupData.SourceRootPath,
                                        &USetupData.DestinationArcPath,
-                                       SystemPartition->FileSystem);
+                                       SystemPartition->Volume.FileSystem);
         if (!NT_SUCCESS(Status))
         {
             MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
-                            SystemPartition->FileSystem);
+                            SystemPartition->Volume.FileSystem);
             return FALSE;
         }
 
@@ -3734,11 +3740,11 @@ BootLoaderHardDiskPage(PINPUT_RECORD Ir)
         Status = InstallVBRToPartition(&USetupData.SystemRootPath,
                                        &USetupData.SourceRootPath,
                                        &USetupData.DestinationArcPath,
-                                       SystemPartition->FileSystem);
+                                       SystemPartition->Volume.FileSystem);
         if (!NT_SUCCESS(Status))
         {
             MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
-                            SystemPartition->FileSystem);
+                            SystemPartition->Volume.FileSystem);
             return FALSE;
         }
     }
@@ -3774,10 +3780,10 @@ BootLoaderInstallPage(PINPUT_RECORD Ir)
     RtlCreateUnicodeString(&USetupData.SystemRootPath, PathBuffer);
     DPRINT1("SystemRootPath: %wZ\n", &USetupData.SystemRootPath);
 
-    if (USetupData.MBRInstallType != 0)
+    if (USetupData.BootLoaderLocation != 0)
         MUIDisplayPage(BOOTLOADER_INSTALL_PAGE);
 
-    switch (USetupData.MBRInstallType)
+    switch (USetupData.BootLoaderLocation)
     {
         /* Skip installation */
         case 0:

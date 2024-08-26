@@ -221,11 +221,30 @@ NtSystemDebugControl(SYSDBG_COMMAND ControlCode,
         case SysDbgSetKdUmExceptionEnable:
         case SysDbgGetKdBlockEnable:
         case SysDbgSetKdBlockEnable:
-            return KdSystemDebugControl(
-                ControlCode,
-                InputBuffer, InputBufferLength,
-                OutputBuffer, OutputBufferLength,
-                ReturnLength, KeGetPreviousMode());
+            _SEH2_TRY
+            {
+                KPROCESSOR_MODE PreviousMode = KeGetPreviousMode();
+                if (PreviousMode != KernelMode)
+                {
+                    if (InputBufferLength)
+                        ProbeForRead(InputBuffer, InputBufferLength, sizeof(ULONG));
+                    if (OutputBufferLength)
+                        ProbeForWrite(OutputBuffer, OutputBufferLength, sizeof(ULONG));
+                    if (ReturnLength)
+                        ProbeForWriteUlong(ReturnLength);
+                }
+                _SEH2_YIELD(return KdSystemDebugControl(
+                    ControlCode,
+                    InputBuffer, InputBufferLength,
+                    OutputBuffer, OutputBufferLength,
+                    ReturnLength, PreviousMode));
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                _SEH2_YIELD(return _SEH2_GetExceptionCode());
+            }
+            _SEH2_END;
+
         default:
             return STATUS_INVALID_INFO_CLASS;
     }

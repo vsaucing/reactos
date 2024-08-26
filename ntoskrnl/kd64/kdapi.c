@@ -2323,6 +2323,14 @@ KdSystemDebugControl(
             }
             break;
 
+        case SysDbgEnableKernelDebugger:
+            Status = KdEnableDebugger();
+            break;
+
+        case SysDbgDisableKernelDebugger:
+            Status = KdDisableDebugger();
+            break;
+
         default:
             DbgPrint("KdSystemDebugControl %d is UNIMPLEMENTED!\n", Command);
             Status = STATUS_NOT_IMPLEMENTED;

@@ -2331,6 +2331,28 @@ KdSystemDebugControl(
             Status = KdDisableDebugger();
             break;
 
+        case SysDbgGetAutoKdEnable:
+            if (OutputBufferLength != sizeof(BOOLEAN))
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            else
+            {
+                *(PBOOLEAN)OutputBuffer = KdAutoEnableOnEvent;
+                Status = STATUS_SUCCESS;
+            }
+            break;
+
+        case SysDbgSetAutoKdEnable:
+            if (InputBufferLength != sizeof(BOOLEAN))
+                Status = STATUS_INFO_LENGTH_MISMATCH;
+            else if (KdPitchDebugger)
+                Status = STATUS_ACCESS_DENIED;
+            else
+            {
+                KdAutoEnableOnEvent = *(PBOOLEAN)InputBuffer;
+                Status = STATUS_SUCCESS;
+            }
+            break;
+
         default:
             DbgPrint("KdSystemDebugControl %d is UNIMPLEMENTED!\n", Command);
             Status = STATUS_NOT_IMPLEMENTED;

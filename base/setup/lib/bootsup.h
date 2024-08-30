@@ -21,7 +21,6 @@ InstallBootcodeToRemovable(
     _In_ ARCHITECTURE_TYPE ArchType,
     _In_ PCUNICODE_STRING RemovableRootPath, // == SystemRootPath
     _In_ PCUNICODE_STRING SourceRootPath,
-    _In_ PCUNICODE_STRING DestinationArcPath,
-    _In_ PCWSTR FileSystemName);
+    _In_ PCUNICODE_STRING DestinationArcPath);
 
 /* EOF */

@@ -3632,8 +3632,7 @@ Retry:
             Status = InstallBootcodeToRemovable(USetupData.ArchType,
                                                 &FloppyDrive,
                                                 &USetupData.SourceRootPath,
-                                                &USetupData.DestinationArcPath,
-                                                L"FAT");
+                                                &USetupData.DestinationArcPath);
             if (!NT_SUCCESS(Status))
             {
                 if (Status == STATUS_DEVICE_NOT_READY)

@@ -2011,7 +2011,9 @@ PrepareAndDoCopyThread(
         /* Install on removable disk */
         case 1:
         {
-            // FIXME: So far USETUP only supports the 1st floppy.
+            // FIXME: So far SETUP only supports the 1st floppy.
+            // Use a simple UI like comdlg32's DlgDirList* to show
+            // a list of drives that the user could select.
             static const UNICODE_STRING FloppyDrive = RTL_CONSTANT_STRING(L"\\Device\\Floppy0\\");
 
             INT nRet;
@@ -2030,8 +2032,7 @@ PrepareAndDoCopyThread(
             Status = InstallBootcodeToRemovable(pSetupData->USetupData.ArchType,
                                                 &FloppyDrive,
                                                 &pSetupData->USetupData.SourceRootPath,
-                                                &pSetupData->USetupData.DestinationArcPath,
-                                                L"FAT");
+                                                &pSetupData->USetupData.DestinationArcPath);
             if (!NT_SUCCESS(Status))
             {
                 if (Status == STATUS_DEVICE_NOT_READY)
@@ -2055,8 +2056,6 @@ PrepareAndDoCopyThread(
         case 2: // System partition / MBR and VBR (on BIOS-based PC)
         case 3: // VBR only (on BIOS-based PC)
         {
-            NTSTATUS Status;
-
             /* Copy FreeLoader to the disk and save the boot entries */
             Status = InstallBootManagerAndBootEntries(
                         pSetupData->USetupData.ArchType,

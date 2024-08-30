@@ -486,24 +486,19 @@ EnumerateBiosDiskEntries(
  * Note also that accessing \Device\HarddiskN\Partition0 or Partition1 returns
  * the same data.
  */
-// static
 BOOLEAN
-IsSuperFloppy(
-    IN PDISKENTRY DiskEntry)
+IsDiskSuperFloppy(
+    _In_ PDRIVE_LAYOUT_INFORMATION Layout,
+    _In_opt_ const ULONGLONG* DiskSize)
 {
     PPARTITION_INFORMATION PartitionInfo;
-    ULONGLONG PartitionLengthEstimate;
-
-    /* No layout buffer: we cannot say anything yet */
-    if (DiskEntry->LayoutBuffer == NULL)
-        return FALSE;
 
     /* We must have only one partition */
-    if (DiskEntry->LayoutBuffer->PartitionCount != 1)
+    if (Layout->PartitionCount != 1)
         return FALSE;
 
     /* Get the single partition entry */
-    PartitionInfo = DiskEntry->LayoutBuffer->PartitionEntry;
+    PartitionInfo = Layout->PartitionEntry;
 
     /* The single partition must start at the beginning of the disk */
     if (!(PartitionInfo->StartingOffset.QuadPart == 0 &&
@@ -513,43 +508,96 @@ IsSuperFloppy(
     }
 
     /* The disk signature is usually set to one; warn in case it's not */
-    if (DiskEntry->LayoutBuffer->Signature != 1)
+    if (Layout->Signature != 1)
     {
-        DPRINT1("Super-Floppy disk %lu signature %08x != 1!\n",
-                DiskEntry->DiskNumber, DiskEntry->LayoutBuffer->Signature);
+        DPRINT1("Super-Floppy " /*"disk %lu "*/ "signature %08x != 1!\n",
+                /*DiskEntry->DiskNumber,*/ Layout->Signature);
     }
 
-    /*
-     * The partition number must be zero or one, be recognized,
-     * have FAT16 type and report as non-bootable.
-     */
-    if ((PartitionInfo->PartitionNumber != 0 &&
+    /* The partition must be recognized and report as FAT16 non-bootable */
+    if ((PartitionInfo->PartitionNumber != 0 && // FIXME: THe PartitionNumber tests are probably unneeded.
          PartitionInfo->PartitionNumber != 1) ||
         PartitionInfo->RecognizedPartition != TRUE ||
         PartitionInfo->PartitionType != PARTITION_FAT_16 ||
         PartitionInfo->BootIndicator != FALSE)
     {
-        DPRINT1("Super-Floppy disk %lu does not return default settings!\n"
+        DPRINT1("Super-Floppy " /*"disk %lu "*/ "does not return default settings!\n"
                 "    PartitionNumber = %lu, expected 0\n"
                 "    RecognizedPartition = %s, expected TRUE\n"
                 "    PartitionType = 0x%02x, expected 0x04 (PARTITION_FAT_16)\n"
                 "    BootIndicator = %s, expected FALSE\n",
-                DiskEntry->DiskNumber,
+                // DiskEntry->DiskNumber,
                 PartitionInfo->PartitionNumber,
                 PartitionInfo->RecognizedPartition ? "TRUE" : "FALSE",
                 PartitionInfo->PartitionType,
                 PartitionInfo->BootIndicator ? "TRUE" : "FALSE");
     }
 
-    /* The partition lengths should agree */
-    PartitionLengthEstimate = GetDiskSizeInBytes(DiskEntry);
-    if (PartitionInfo->PartitionLength.QuadPart != PartitionLengthEstimate)
+    /* The partition and disk sizes should agree */
+    // DiskSize = GetDiskSizeInBytes(DiskEntry);
+    if (DiskSize && (PartitionInfo->PartitionLength.QuadPart != *DiskSize))
     {
-        DPRINT1("PartitionLength = %I64u is different from PartitionLengthEstimate = %I64u\n",
-                PartitionInfo->PartitionLength.QuadPart, PartitionLengthEstimate);
+        DPRINT1("PartitionLength = %I64u is different from DiskSize = %I64u\n",
+                PartitionInfo->PartitionLength.QuadPart, *DiskSize);
     }
 
     return TRUE;
+}
+
+BOOLEAN
+IsDiskSuperFloppyEx(
+    _In_ PDRIVE_LAYOUT_INFORMATION_EX LayoutEx,
+    _In_opt_ const ULONGLONG* DiskSize)
+{
+    DRIVE_LAYOUT_INFORMATION Layout;
+    PPARTITION_INFORMATION PartitionInfo;
+    PPARTITION_INFORMATION_EX PartitionInfoEx;
+
+    /* The layout must be MBR and have only one partition */
+    if (LayoutEx->PartitionStyle != PARTITION_STYLE_MBR)
+        return FALSE;
+    if (LayoutEx->PartitionCount != 1)
+        return FALSE;
+
+    /* Convert the layout */
+    Layout.PartitionCount = LayoutEx->PartitionCount;
+    Layout.Signature = LayoutEx->Mbr.Signature;
+
+    /* Convert the single partition entry */
+    PartitionInfo = Layout.PartitionEntry;
+    PartitionInfoEx = LayoutEx->PartitionEntry;
+
+    PartitionInfo->StartingOffset = PartitionInfoEx->StartingOffset;
+    PartitionInfo->PartitionLength = PartitionInfoEx->PartitionLength;
+    PartitionInfo->HiddenSectors = PartitionInfoEx->Mbr.HiddenSectors;
+    PartitionInfo->PartitionNumber = PartitionInfoEx->PartitionNumber;
+    PartitionInfo->PartitionType = PartitionInfoEx->Mbr.PartitionType;
+    PartitionInfo->BootIndicator = PartitionInfoEx->Mbr.BootIndicator;
+    PartitionInfo->RecognizedPartition = PartitionInfoEx->Mbr.RecognizedPartition;
+    PartitionInfo->RewritePartition = PartitionInfoEx->RewritePartition;
+
+    /* Call the non-Ex helper */
+    return IsDiskSuperFloppy(&Layout, DiskSize);
+}
+
+// static
+BOOLEAN
+IsSuperFloppy(
+    _In_ PDISKENTRY DiskEntry)
+{
+    ULONGLONG DiskSize;
+
+    /* No layout buffer: we cannot say anything yet */
+    if (!DiskEntry->LayoutBuffer)
+        return FALSE;
+
+    /* The disk must be MBR */
+    if (DiskEntry->DiskStyle != PARTITION_STYLE_MBR)
+        return FALSE;
+
+    // DiskEntry->DiskNumber
+    DiskSize = GetDiskSizeInBytes(DiskEntry);
+    return IsDiskSuperFloppy(DiskEntry->LayoutBuffer, &DiskSize);
 }
 
 

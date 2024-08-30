@@ -3627,8 +3627,13 @@ Retry:
         }
         else if (Ir->Event.KeyEvent.uChar.AsciiChar == 0x0D)    /* ENTER */
         {
-            Status = InstallFatBootcodeToFloppy(&USetupData.SourceRootPath,
-                                                &USetupData.DestinationArcPath);
+            // FIXME: So far USETUP only supports the 1st floppy.
+            static const UNICODE_STRING FloppyDrive = RTL_CONSTANT_STRING(L"\\Device\\Floppy0\\");
+            Status = InstallBootcodeToRemovable(USetupData.ArchType,
+                                                &FloppyDrive,
+                                                &USetupData.SourceRootPath,
+                                                &USetupData.DestinationArcPath,
+                                                L"FAT");
             if (!NT_SUCCESS(Status))
             {
                 if (Status == STATUS_DEVICE_NOT_READY)
@@ -3652,54 +3657,55 @@ static BOOLEAN
 BootLoaderHardDiskPage(PINPUT_RECORD Ir)
 {
     NTSTATUS Status;
-    WCHAR DestinationDevicePathBuffer[MAX_PATH];
 
-    if (USetupData.BootLoaderLocation == 2)
+    /* Copy FreeLoader to the disk and save the boot entries */
+    Status = InstallBootManagerAndBootEntries(
+                USetupData.ArchType,
+                &USetupData.SourceRootPath,
+                &USetupData.SystemRootPath,
+                /**/SystemVolume,/**/ // FIXME: Redundant param.
+                &USetupData.DestinationArcPath,
+                ((USetupData.BootLoaderLocation == 2)
+                    ? 1 /* Install MBR and VBR */
+                    : 0 /* Install VBR only */));
+    if (Status == STATUS_SUCCESS) // (NT_SUCCESS(Status))
+        return TRUE; // Successful installation.
+
+    if (Status == ERROR_WRITE_BOOT)
     {
-        /* Step 1: Write the VBR */
-        Status = InstallVBRToPartition(&USetupData.SystemRootPath,
-                                       &USetupData.SourceRootPath,
-                                       &USetupData.DestinationArcPath,
-                                       SystemVolume->Info.FileSystem);
-        if (!NT_SUCCESS(Status))
-        {
-            MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
-                            SystemVolume->Info.FileSystem);
-            return FALSE;
-        }
-
-        /* Step 2: Write the MBR if the disk containing the system partition is not a super-floppy */
-        if (!IsSuperFloppy(SystemPartition->DiskEntry))
-        {
-            RtlStringCchPrintfW(DestinationDevicePathBuffer, ARRAYSIZE(DestinationDevicePathBuffer),
-                                L"\\Device\\Harddisk%d\\Partition0",
-                                SystemPartition->DiskEntry->DiskNumber);
-            Status = InstallMbrBootCodeToDisk(&USetupData.SystemRootPath,
-                                              &USetupData.SourceRootPath,
-                                              DestinationDevicePathBuffer);
-            if (!NT_SUCCESS(Status))
-            {
-                DPRINT1("InstallMbrBootCodeToDisk() failed: Status 0x%lx\n", Status);
-                MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER, L"MBR");
-                return FALSE;
-            }
-        }
+        /* Error when writing the VBR */
+        MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
+                        SystemVolume->Info.FileSystem);
     }
-    else
+    else if (Status == ERROR_INSTALL_BOOTCODE)
     {
-        Status = InstallVBRToPartition(&USetupData.SystemRootPath,
-                                       &USetupData.SourceRootPath,
-                                       &USetupData.DestinationArcPath,
-                                       SystemVolume->Info.FileSystem);
-        if (!NT_SUCCESS(Status))
-        {
-            MUIDisplayError(ERROR_WRITE_BOOT, Ir, POPUP_WAIT_ENTER,
-                            SystemVolume->Info.FileSystem);
-            return FALSE;
-        }
+        /* Error when writing the MBR */
+        MUIDisplayError(ERROR_INSTALL_BOOTCODE, Ir, POPUP_WAIT_ENTER, L"MBR");
     }
+    else if (Status == STATUS_NOT_SUPPORTED)
+    {
+        PopupError("Setup does not currently support installing\n"
+                   "the bootloader on the computer you are using.\n"
+                   "Press ENTER to continue anyway.",
+                   MUIGetString(STRING_CONTINUE),
+                   Ir, POPUP_WAIT_ENTER);
+    }
+    else /* Any other NTSTATUS code */
+    {
+        CHAR Buffer[MAX_PATH];
 
-    return TRUE;
+        DPRINT1("InstallBootManagerAndBootEntries() failed: Status 0x%lx\n", Status);
+
+        RtlStringCbPrintfA(Buffer, sizeof(Buffer),
+                           "Setup could not install the bootloader.\n"
+                           "(Status 0x%08lx).\n"
+                           "Press ENTER to continue anyway.",
+                           Status);
+        PopupError(Buffer,
+                   MUIGetString(STRING_CONTINUE),
+                   Ir, POPUP_WAIT_ENTER);
+    }
+    return FALSE;
 }
 
 /*

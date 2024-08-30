@@ -1,10 +1,9 @@
 /*
- * COPYRIGHT:       See COPYING in the top level directory
- * PROJECT:         ReactOS Setup Library
- * FILE:            base/setup/lib/bootsup.c
- * PURPOSE:         Bootloader support functions
- * PROGRAMMERS:     ...
- *                  Hermes Belusca-Maito (hermes.belusca@sfr.fr)
+ * PROJECT:     ReactOS Setup Library
+ * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
+ * PURPOSE:     Bootloader support functions
+ * COPYRIGHT:   ...
+ *              Copyright 2017-2024 Hermès Bélusca-Maïto <hermes.belusca-maito@reactos.org>
  */
 
 /* INCLUDES *****************************************************************/
@@ -827,10 +826,11 @@ C_ASSERT(sizeof(PARTITION_SECTOR) == SECTORSIZE);
     return Status;
 }
 
+static
 NTSTATUS
 InstallMbrBootCodeToDisk(
-    IN PUNICODE_STRING SystemRootPath,
-    IN PUNICODE_STRING SourceRootPath,
+    IN PCUNICODE_STRING SystemRootPath,
+    IN PCUNICODE_STRING SourceRootPath,
     IN PCWSTR DestinationDevicePathBuffer)
 {
     NTSTATUS Status;
@@ -881,9 +881,9 @@ InstallMbrBootCodeToDisk(
 static
 NTSTATUS
 InstallFatBootcodeToPartition(
-    IN PUNICODE_STRING SystemRootPath,
-    IN PUNICODE_STRING SourceRootPath,
-    IN PUNICODE_STRING DestinationArcPath,
+    IN PCUNICODE_STRING SystemRootPath,
+    IN PCUNICODE_STRING SourceRootPath,
+    IN PCUNICODE_STRING DestinationArcPath,
     IN PCWSTR FileSystemName)
 {
     NTSTATUS Status;
@@ -1175,9 +1175,9 @@ InstallFatBootcodeToPartition(
 static
 NTSTATUS
 InstallBtrfsBootcodeToPartition(
-    IN PUNICODE_STRING SystemRootPath,
-    IN PUNICODE_STRING SourceRootPath,
-    IN PUNICODE_STRING DestinationArcPath)
+    IN PCUNICODE_STRING SystemRootPath,
+    IN PCUNICODE_STRING SourceRootPath,
+    IN PCUNICODE_STRING DestinationArcPath)
 {
     NTSTATUS Status;
     BOOLEAN DoesFreeLdrExist;
@@ -1278,9 +1278,9 @@ InstallBtrfsBootcodeToPartition(
 static
 NTSTATUS
 InstallNtfsBootcodeToPartition(
-    IN PUNICODE_STRING SystemRootPath,
-    IN PUNICODE_STRING SourceRootPath,
-    IN PUNICODE_STRING DestinationArcPath)
+    IN PCUNICODE_STRING SystemRootPath,
+    IN PCUNICODE_STRING SourceRootPath,
+    IN PCUNICODE_STRING DestinationArcPath)
 {
     NTSTATUS Status;
     BOOLEAN DoesFreeLdrExist;
@@ -1376,12 +1376,12 @@ InstallNtfsBootcodeToPartition(
     return STATUS_SUCCESS;
 }
 
-
+static
 NTSTATUS
 InstallVBRToPartition(
-    IN PUNICODE_STRING SystemRootPath,
-    IN PUNICODE_STRING SourceRootPath,
-    IN PUNICODE_STRING DestinationArcPath,
+    IN PCUNICODE_STRING SystemRootPath,
+    IN PCUNICODE_STRING SourceRootPath,
+    IN PCUNICODE_STRING DestinationArcPath,
     IN PCWSTR FileSystemName)
 {
     if (wcsicmp(FileSystemName, L"FAT")   == 0 ||
@@ -1422,26 +1422,172 @@ InstallVBRToPartition(
 }
 
 
+/* GENERIC FUNCTIONS *********************************************************/
+
+/**
+ * @brief
+ * Installs FreeLoader on the system and configure the boot entries.
+ *
+ * @todo
+ * Split this function into just the InstallBootManager, and a separate one
+ * for just the boot entries.
+ *
+ * @param[in]   SourceRootPath
+ * The installation source, where to copy the FreeLdr boot manager from.
+ *
+ * @param[in]   SystemRootPath , SystemVolume
+ * The system partition path, where the FreeLdr boot manager and its
+ * settings are saved to.
+ *
+ * @param[in]   DestinationArcPath
+ * The ReactOS installation path in ARC format.
+ *
+ * @param[in]   Options
+ * For BIOS-based PCs:
+ * LOBYTE:
+ *      0: Install only on VBR;
+ *      1: Install on both VBR and MBR.
+ *      2: Install on removable disk.
+ * HIBYTE:
+ *      TRUE: Recognize and backup the original VBR.
+ *      FALSE: Unconditionally erase the original VBR.
+ **/
 NTSTATUS
-InstallFatBootcodeToFloppy(
-    IN PUNICODE_STRING SourceRootPath,
-    IN PUNICODE_STRING DestinationArcPath)
+InstallBootManagerAndBootEntries(
+    _In_ ARCHITECTURE_TYPE ArchType,
+    _In_ PCUNICODE_STRING SourceRootPath,
+    _In_ PCUNICODE_STRING SystemRootPath,
+    /**/_In_ PVOLENTRY SystemVolume,/**/ // FIXME: Redundant param.
+    _In_ PCUNICODE_STRING DestinationArcPath,
+    _In_ ULONG_PTR Options)
 {
-    static const PCWSTR FloppyDevice = L"\\Device\\Floppy0\\";
-
     NTSTATUS Status;
-    WCHAR SrcPath[MAX_PATH];
-    WCHAR DstPath[MAX_PATH];
+    BOOLEAN IsBIOS = ((ArchType == ARCH_PcAT) || (ArchType == ARCH_NEC98x86));
+    UCHAR InstallType = (Options & 0x03);
 
-    /* Verify that the floppy disk is accessible */
-    if (DoesDirExist(NULL, FloppyDevice) == FALSE)
+    // FIXME: We currently only support BIOS-based PCs
+    if (!IsBIOS)
+    {
+        // TODO: Other platforms
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    if (InstallType <= 1)
+    {
+        /* Step 1: Write the VBR */
+        Status = InstallVBRToPartition(SystemRootPath,
+                                       SourceRootPath,
+                                       DestinationArcPath,
+                                       SystemVolume->Info.FileSystem);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("InstallVBRToPartition() failed: Status 0x%lx\n", Status);
+            return ERROR_WRITE_BOOT; // Status; // STATUS_BAD_MASTER_BOOT_RECORD;
+        }
+
+        /* Step 2: Write the MBR if the disk containing
+         * the system partition is not a super-floppy */
+        if ((InstallType == 1) && !IsSuperFloppy(SystemVolume->PartEntry->DiskEntry))
+        {
+            WCHAR SystemDiskPath[MAX_PATH];
+            RtlStringCchPrintfW(SystemDiskPath, _countof(SystemDiskPath),
+                                L"\\Device\\Harddisk%d\\Partition0",
+                                SystemVolume->PartEntry->DiskEntry->DiskNumber);
+            Status = InstallMbrBootCodeToDisk(SystemRootPath,
+                                              SourceRootPath,
+                                              SystemDiskPath);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("InstallMbrBootCodeToDisk() failed: Status 0x%lx\n", Status);
+                return ERROR_INSTALL_BOOTCODE; // Status; // STATUS_BAD_MASTER_BOOT_RECORD;
+            }
+        }
+    }
+    else if (InstallType == 2)
+    {
+        PCWSTR FileSystemName;
+        WCHAR SrcPath[MAX_PATH];
+        WCHAR DstPath[MAX_PATH];
+
+#if 0
+        /* Install the bootsector */
+        Status = InstallVBRToPartition(...);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("InstallVBRToPartition() failed: Status 0x%lx\n", Status);
+            return Status;
+        }
+#endif
+
+        // TEMP HACK: Find another way to pass around the target removable drive file system.
+        // FIXME: We currently only support FAT12 file system.
+        FileSystemName = (PCWSTR)SystemVolume; // See InstallBootcodeToRemovable()
+        if (!FileSystemName || wcsicmp(FileSystemName, L"FAT") != 0)
+            return STATUS_NOT_SUPPORTED;
+
+        /* Copy FreeLoader to the boot partition */
+        CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\loader\\freeldr.sys");
+        CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, SystemRootPath->Buffer, L"freeldr.sys");
+
+        DPRINT("Copy: %S ==> %S\n", SrcPath, DstPath);
+        Status = SetupCopyFile(SrcPath, DstPath, FALSE);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("SetupCopyFile() failed (Status %lx)\n", Status);
+            return Status;
+        }
+
+        /* Create new 'freeldr.ini' */
+        DPRINT("Create new 'freeldr.ini'\n");
+        Status = CreateFreeLoaderIniForReactOS(SystemRootPath->Buffer, DestinationArcPath->Buffer);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("CreateFreeLoaderIniForReactOS() failed (Status %lx)\n", Status);
+            return Status;
+        }
+
+        /* Install FAT12 boosector */
+        CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\loader\\fat.bin");
+        CombinePaths(DstPath, ARRAYSIZE(DstPath), 1, SystemRootPath->Buffer);
+
+        DPRINT("Install FAT12 bootcode: %S ==> %S\n", SrcPath, DstPath);
+        Status = InstallBootCodeToDisk(SrcPath, DstPath, InstallFat12BootCode);
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("InstallBootCodeToDisk(FAT12) failed (Status %lx)\n", Status);
+            return Status;
+        }
+    }
+
+    return Status;
+}
+
+NTSTATUS
+InstallBootcodeToRemovable(
+    _In_ ARCHITECTURE_TYPE ArchType,
+    _In_ PCUNICODE_STRING RemovableRootPath, // == SystemRootPath
+    _In_ PCUNICODE_STRING SourceRootPath,
+    _In_ PCUNICODE_STRING DestinationArcPath,
+    _In_ PCWSTR FileSystemName)
+{
+    static const UNICODE_STRING DeviceFloppy = RTL_CONSTANT_STRING(L"\\Device\\Floppy");
+    NTSTATUS Status;
+    BOOLEAN IsFloppy;
+
+    /* Verify that the removable disk is accessible */
+    if (!DoesDirExist(NULL, RemovableRootPath->Buffer))
         return STATUS_DEVICE_NOT_READY;
 
-    /* Format the floppy disk */
+    /* Check whether this is floppy or something else */
+    // FIXME: This is all hardcoded! TODO: Determine dynamically
+    IsFloppy = RtlPrefixUnicodeString(&DeviceFloppy, RemovableRootPath, TRUE);
+    if (IsFloppy) FileSystemName = L"FAT";
+
+    /* Format the removable disk */
     // FormatPartition(...)
-    Status = FormatFileSystem(FloppyDevice,
-                              L"FAT",
-                              FMIFS_FLOPPY,
+    Status = FormatFileSystem(RemovableRootPath->Buffer,
+                              FileSystemName,
+                              (IsFloppy ? FMIFS_FLOPPY : FMIFS_REMOVABLE),
                               NULL,
                               TRUE,
                               0,
@@ -1449,47 +1595,22 @@ InstallFatBootcodeToFloppy(
     if (!NT_SUCCESS(Status))
     {
         if (Status == STATUS_NOT_SUPPORTED)
-            DPRINT1("FAT FS non existent on this system?!\n");
+            DPRINT1("%s FS non existent on this system?!\n", FileSystemName);
         else
-            DPRINT1("VfatFormat() failed (Status %lx)\n", Status);
-
+            DPRINT1("FormatFileSystem(%s) failed: Status %lx\n", FileSystemName, Status);
         return Status;
     }
 
-    /* Copy FreeLoader to the boot partition */
-    CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\loader\\freeldr.sys");
-    CombinePaths(DstPath, ARRAYSIZE(DstPath), 2, FloppyDevice, L"freeldr.sys");
-
-    DPRINT("Copy: %S ==> %S\n", SrcPath, DstPath);
-    Status = SetupCopyFile(SrcPath, DstPath, FALSE);
+    /* Copy FreeLoader to the removable disk and save the boot entries */
+    Status = InstallBootManagerAndBootEntries(ArchType,
+                                              SourceRootPath,
+                                              RemovableRootPath,
+                                              (PVOLENTRY)FileSystemName, // FIXME: Temp HACK!!
+                                              DestinationArcPath,
+                                              2 /* Install on removable media */);
     if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("SetupCopyFile() failed (Status %lx)\n", Status);
-        return Status;
-    }
-
-    /* Create new 'freeldr.ini' */
-    DPRINT("Create new 'freeldr.ini'\n");
-    Status = CreateFreeLoaderIniForReactOS(FloppyDevice, DestinationArcPath->Buffer);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("CreateFreeLoaderIniForReactOS() failed (Status %lx)\n", Status);
-        return Status;
-    }
-
-    /* Install FAT12 boosector */
-    CombinePaths(SrcPath, ARRAYSIZE(SrcPath), 2, SourceRootPath->Buffer, L"\\loader\\fat.bin");
-    CombinePaths(DstPath, ARRAYSIZE(DstPath), 1, FloppyDevice);
-
-    DPRINT("Install FAT12 bootcode: %S ==> %S\n", SrcPath, DstPath);
-    Status = InstallBootCodeToDisk(SrcPath, DstPath, InstallFat12BootCode);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("InstallBootCodeToDisk(FAT12) failed (Status %lx)\n", Status);
-        return Status;
-    }
-
-    return STATUS_SUCCESS;
+        DPRINT1("InstallBootManagerAndBootEntries() failed: Status %lx\n", Status);
+    return Status;
 }
 
 /* EOF */
